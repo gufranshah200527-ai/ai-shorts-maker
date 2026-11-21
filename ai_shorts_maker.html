@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Shorts Maker</title>
+<style>
+*{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#0b1020;color:#f4f6ff}
+.wrap{max-width:900px;margin:auto;padding:24px 16px 48px}.brand{font-size:14px;color:#a5b4fc;letter-spacing:.12em;text-transform:uppercase}
+h1{margin:8px 0;font-size:clamp(28px,6vw,44px)}p{color:#b9c1d9;line-height:1.5}
+.panel{background:#151c31;border:1px solid #2b3655;border-radius:18px;padding:18px;margin-top:18px}
+.drop{border:2px dashed #536182;border-radius:14px;padding:24px;text-align:center;background:#10172a}
+input[type=file]{max-width:100%;margin-top:12px}video{width:100%;max-height:460px;background:#000;border-radius:12px;margin-top:14px}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:14px}
+label{display:block;font-size:14px;color:#c9d1e8}input[type=number]{width:100%;margin-top:6px;padding:12px;border-radius:10px;border:1px solid #394766;background:#0b1020;color:#fff;font-size:16px}
+button{border:0;border-radius:12px;padding:13px 16px;font-weight:700;font-size:15px;cursor:pointer;background:#7c83ff;color:#0a0d19}
+button:disabled{opacity:.5;cursor-not-allowed}.secondary{background:#283451;color:#fff}
+.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}.status{margin-top:12px;color:#a5b4fc;white-space:pre-wrap}
+.note{font-size:13px;color:#9da9c6}.hidden{display:none}
+@media(max-width:560px){.grid{grid-template-columns:1fr}.wrap{padding:18px 12px}.panel{padding:14px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand">Your personal video tool</div>
+  <h1>AI Shorts Maker</h1>
+  <p>Upload a video, choose a section, and export a vertical-ready clip. Processing runs in your browser.</p>
+  <div class="panel">
+    <div class="drop">
+      <strong>Choose a video to start</strong><br>
+      <input id="file" type="file" accept="video/*">
+      <p class="note">For best results, start with a short test video. Large files can be slow on phones.</p>
+    </div>
+    <video id="preview" controls class="hidden"></video>
+    <div class="grid">
+      <label>Clip start (seconds)
+        <input id="start" type="number" min="0" step="0.1" value="0">
+      </label>
+      <label>Clip end (seconds)
+        <input id="end" type="number" min="0" step="0.1" value="30">
+      </label>
+    </div>
+    <div class="actions">
+      <button id="export" disabled>Cut &amp; Download MP4</button>
+      <button id="reset" class="secondary">Reset</button>
+    </div>
+    <div id="status" class="status"></div>
+  </div>
+  <div class="panel">
+    <strong>What this first version does</strong>
+    <p>✓ Upload and preview a video<br>✓ Select start/end time<br>✓ Cut and download an MP4 locally</p>
+    <p class="note">Automatic viral-moment detection, captions, face tracking, and smart reframing are not included yet. We can add them in later versions.</p>
+  </div>
+</div>
+<script type="module">
+import { FFmpeg } from "https://esm.sh/@ffmpeg/ffmpeg@0.12.10";
+import { toBlobURL } from "https://esm.sh/@ffmpeg/util@0.12.1";
+
+const fileInput=document.getElementById("file");
+const video=document.getElementById("preview");
+const startInput=document.getElementById("start");
+const endInput=document.getElementById("end");
+const exportBtn=document.getElementById("export");
+const resetBtn=document.getElementById("reset");
+const statusEl=document.getElementById("status");
+let sourceFile=null, ffmpeg=null, loaded=false;
+
+function setStatus(msg){statusEl.textContent=msg}
+fileInput.addEventListener("change",()=>{
+  sourceFile=fileInput.files?.[0]||null;
+  if(!sourceFile)return;
+  video.src=URL.createObjectURL(sourceFile);
+  video.classList.remove("hidden");
+  video.onloadedmetadata=()=>{endInput.value=Math.min(30,video.duration).toFixed(1);exportBtn.disabled=false;setStatus(`Video loaded: ${video.duration.toFixed(1)} seconds`)};
+});
+resetBtn.addEventListener("click",()=>{
+  fileInput.value="";sourceFile=null;video.removeAttribute("src");video.load();video.classList.add("hidden");
+  startInput.value="0";endInput.value="30";exportBtn.disabled=true;setStatus("");
+});
+exportBtn.addEventListener("click",async()=>{
+  if(!sourceFile)return;
+  const start=Number(startInput.value),end=Number(endInput.value);
+  if(!Number.isFinite(start)||!Number.isFinite(end)||start<0||end<=start||end>video.duration){setStatus("Please enter a valid start and end time.");return}
+  exportBtn.disabled=true;
+  try{
+    setStatus("Loading video processing engine (first time may take a little while)…");
+    if(!ffmpeg)ffmpeg=new FFmpeg();
+    if(!loaded){
+      ffmpeg.on("log",({message})=>{if(message) setStatus(message)});
+      const base="https://cdn.jsdelivr.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd";
+      await ffmpeg.load({coreURL:await toBlobURL(`${base}/ffmpeg-core.js`,"text/javascript"),wasmURL:await toBlobURL(`${base}/ffmpeg-core.wasm`,"application/wasm")});
+      loaded=true;
+    }
+    setStatus("Preparing file…");
+    const inputName="input-video";
+    const outputName="short-clip.mp4";
+    await ffmpeg.writeFile(inputName,new Uint8Array(await sourceFile.arrayBuffer()));
+    setStatus("Cutting clip… keep this page open.");
+    await ffmpeg.exec(["-ss",String(start),"-i",inputName,"-t",String(end-start),"-vf","scale=720:1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2","-c:v","libx264","-preset","ultrafast","-crf","28","-c:a","aac","-movflags","+faststart",outputName]);
+    const data=await ffmpeg.readFile(outputName);
+    const blob=new Blob([data],{type:"video/mp4"});
+    const link=document.createElement("a");link.href=URL.createObjectURL(blob);link.download="short-clip.mp4";link.click();
+    setStatus("Done! Your clip download should have started.");
+    await ffmpeg.deleteFile(inputName);await ffmpeg.deleteFile(outputName);
+  }catch(e){console.error(e);setStatus("Processing failed. Try a smaller video or a desktop browser. Error: "+(e?.message||e))}
+  finally{exportBtn.disabled=false}
+});
+</script>
+</body>
+</html>
